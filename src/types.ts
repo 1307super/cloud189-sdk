@@ -155,6 +155,7 @@ export interface ConfigurationOptions {
   /** token */
   token?: Store
   ssonCookie?: string
+  proxyUrl?: string
 }
 
 /**

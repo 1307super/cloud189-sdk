@@ -27,7 +27,8 @@ import {
 } from './const'
 import { Store, MemoryStore } from './store'
 import { checkError } from './error'
-
+const { HttpsProxyAgent } = require('https-proxy-agent');
+const { HttpProxyAgent } = require('http-proxy-agent');
 const config = {
   clientId: '538135150693412',
   model: 'KB2000',
@@ -45,6 +46,7 @@ interface LoginResponse {
  */
 export class CloudAuthClient {
   readonly request: Got
+  private proxyUrl: string | null = null;
 
   constructor() {
     this.request = got.extend({
@@ -53,6 +55,16 @@ export class CloudAuthClient {
         Accept: 'application/json;charset=UTF-8'
       },
       hooks: {
+        beforeRequest: [
+          async (options) => {
+            if (this.proxyUrl) {
+              options.agent = {
+                http: new HttpProxyAgent(this.proxyUrl),
+                https: new HttpsProxyAgent(this.proxyUrl)
+              };
+            }
+          }
+        ],
         afterResponse: [
           async (response, retryWithMergedOptions) => {
             logger.debug(`url: ${response.requestUrl}, response: ${response.body})}`)
@@ -62,6 +74,10 @@ export class CloudAuthClient {
         ]
       }
     })
+  }
+
+  setProxy(proxyUrl: string | null) {
+    this.proxyUrl = proxyUrl;
   }
 
   /**
@@ -226,6 +242,7 @@ export class CloudClient {
   readonly session: ClientSession
   #sessionKeyPromise: Promise<TokenSession>
   #accessTokenPromise: Promise<AccessTokenResponse>
+  private proxyUrl: string | null = null;
 
   constructor(_options: ConfigurationOptions) {
     this.#valid(_options)
@@ -234,6 +251,10 @@ export class CloudClient {
     this.ssonCookie = _options.ssonCookie
     this.tokenStore = _options.token || new MemoryStore()
     this.authClient = new CloudAuthClient()
+    // 如果有代理
+    if(_options.proxyUrl) {
+      this.setProxy(_options.proxyUrl);
+    }
     this.session = {
       accessToken: '',
       sessionKey: ''
@@ -250,6 +271,12 @@ export class CloudClient {
       hooks: {
         beforeRequest: [
           async (options) => {
+            if (this.proxyUrl) {
+              options.agent = {
+                http: new HttpProxyAgent(this.proxyUrl),
+                https: new HttpsProxyAgent(this.proxyUrl)
+              };
+            }
             if (options.url.href.includes(API_URL)) {
               const accessToken = await this.getAccessToken()
               const { query } = url.parse(options.url.toString(), true)
@@ -316,6 +343,11 @@ export class CloudClient {
       logger.error('valid')
       throw new Error('Please provide username and password or token !')
     }
+  }
+
+  setProxy(proxyUrl: string | null) {
+    this.proxyUrl = proxyUrl;
+    this.authClient.setProxy(proxyUrl);
   }
 
   async getSession() {
