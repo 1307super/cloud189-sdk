@@ -54,6 +54,9 @@ export class CloudAuthClient {
         'User-Agent': UserAgent,
         Accept: 'application/json;charset=UTF-8'
       },
+      timeout: {
+        request: 10000  // 设置10秒超时
+      },
       hooks: {
         beforeRequest: [
           async (options) => {
@@ -262,6 +265,9 @@ export class CloudClient {
     this.request = got.extend({
       retry: {
         limit: 5
+      },
+      timeout: {
+        request: 10000  // 设置10秒超时
       },
       headers: {
         'User-Agent': UserAgent,
