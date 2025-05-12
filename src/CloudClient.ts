@@ -29,6 +29,8 @@ import { Store, MemoryStore } from './store'
 import { checkError } from './error'
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { HttpProxyAgent } = require('http-proxy-agent');
+// 从环境变量读取ipv4oripv6, 默认auto
+const dnsLookupIpVersion = process.env.DNS_LOOKUP_IP_VERSION || 'auto';
 const config = {
   clientId: '538135150693412',
   model: 'KB2000',
@@ -47,6 +49,7 @@ interface LoginResponse {
 export class CloudAuthClient {
   readonly request: Got
   private proxyUrl: string | null = null;
+  private loginCache: CacheQuery | null = null;
 
   constructor() {
     this.request = got.extend({
@@ -57,6 +60,8 @@ export class CloudAuthClient {
       timeout: {
         request: 10000  // 设置10秒超时
       },
+      // 配置ipv4
+      dnsLookupIpVersion: dnsLookupIpVersion as 'auto' | 'ipv4' | 'ipv6',
       hooks: {
         beforeRequest: [
           async (options) => {
@@ -112,20 +117,17 @@ export class CloudAuthClient {
       const lt = res.match(`lt = "(.+?)"`)[1]
       const paramId = res.match(`paramId = "(.+?)"`)[1]
       const reqId = res.match(`reqId = "(.+?)"`)[1]
-      return { captchaToken, lt, paramId, reqId }
+      return { captchaToken, lt, paramId, reqId, publicKey: '', preKey: '', rsaUserName: '', rsaPassword: ''}
     }
     return null
   }
 
-  #builLoginForm = (encrypt, appConf: CacheQuery, username: string, password: string) => {
-    const keyData = `-----BEGIN PUBLIC KEY-----\n${encrypt.pubKey}\n-----END PUBLIC KEY-----`
-    const usernameEncrypt = rsaEncrypt(keyData, username)
-    const passwordEncrypt = rsaEncrypt(keyData, password)
+  #builLoginForm = (appConf: CacheQuery, validateCode?: string) => {
     const data = {
       appKey: AppID,
       accountType: AccountType,
       // mailSuffix: '@189.cn',
-      validateCode: '',
+      validateCode: validateCode,
       captchaToken: appConf.captchaToken,
       dynamicCheck: 'FALSE',
       clientType: '1',
@@ -133,8 +135,8 @@ export class CloudAuthClient {
       isOauth2: false,
       returnUrl: ReturnURL,
       paramId: appConf.paramId,
-      userName: `${encrypt.pre}${usernameEncrypt}`,
-      password: `${encrypt.pre}${passwordEncrypt}`
+      userName: appConf.rsaUserName,
+      password: appConf.rsaPassword
     }
     return data
   }
@@ -156,18 +158,32 @@ export class CloudAuthClient {
   /**
    * 用户名密码登录
    * */
-  async loginByPassword(username: string, password: string) {
+  async loginByPassword(username: string, password: string, validateCode?: string) {
     logger.debug('loginByPassword...')
     try {
-      const res = await Promise.all([
-        //1.获取公钥
-        this.getEncrypt(),
-        //2.获取登录参数
-        this.getLoginForm()
-      ])
-      const encrypt = res[0].data
-      const appConf = res[1]
-      const data = this.#builLoginForm(encrypt, appConf, username, password)
+      let appConf: CacheQuery;
+      if (validateCode && this.loginCache) {
+        appConf = this.loginCache
+      }else{
+        const res = await Promise.all([
+          //1.获取公钥
+          this.getEncrypt(),
+          //2.获取登录参数
+          this.getLoginForm()
+        ])
+        const encrypt = res[0].data
+        appConf = res[1]
+        appConf.publicKey = encrypt.pubKey
+        appConf.preKey = encrypt.pre
+        const keyData = `-----BEGIN PUBLIC KEY-----\n${encrypt.pubKey}\n-----END PUBLIC KEY-----`
+        const usernameEncrypt = rsaEncrypt(keyData, username)
+        const passwordEncrypt = rsaEncrypt(keyData, password)
+        appConf.rsaUserName = `${encrypt.pre}${usernameEncrypt}`
+        appConf.rsaPassword = `${encrypt.pre}${passwordEncrypt}`
+        this._checkValidateCode(appConf, appConf.rsaUserName)
+      }
+      
+      const data = this.#builLoginForm(appConf, validateCode)
       const loginRes = await this.request
         .post(`${AUTH_URL}/api/logbox/oauth2/loginSubmit.do`, {
           headers: {
@@ -178,10 +194,17 @@ export class CloudAuthClient {
           form: data
         })
         .json<LoginResponse>()
+        if (!loginRes.toUrl) {
+          throw new Error(`登录失败: ${loginRes.msg}`)
+        }
       return await this.getSessionForPC({ redirectURL: loginRes.toUrl })
     } catch (e) {
       logger.error(e)
       throw e
+    }finally{
+      if (validateCode) {
+        this.loginCache = null
+      }
     }
   }
 
@@ -229,6 +252,49 @@ export class CloudAuthClient {
       })
       .json()
   }
+
+  /**
+   * 判断是否需要验证码
+   */
+  async _checkValidateCode(appConf: CacheQuery, username: string, validateCode?: string) {
+    // 判断是否需要验证码
+    const needCaptcha = await this.request
+    .post(`${AUTH_URL}/api/logbox/oauth2/needcaptcha.do`, {
+      headers: {
+        REQID: appConf.reqId
+      },
+      form: {
+        appKey: AppID,
+        accountType: AccountType,
+        userName: username,
+      }
+    })
+    .text()
+    if (needCaptcha === '1') {
+      const imgRes = await this.request
+          .get(`${AUTH_URL}/api/logbox/oauth2/picCaptcha.do`, {
+            searchParams: {
+              token: appConf.captchaToken,
+              REQID: appConf.reqId,
+              rnd: Date.now()
+            },
+            responseType: 'buffer'
+          })
+        
+        if (imgRes.rawBody.length > 20) {
+          const base64Image = imgRes.rawBody.toString('base64')
+          this.loginCache = appConf
+          throw {
+            code: 'NEED_CAPTCHA',
+            message: '需要验证码',
+            data: {
+              image: `data:image/png;base64,${base64Image}`
+            }
+          }
+        }
+    }
+    return false;
+  }
 }
 
 /**
@@ -246,6 +312,7 @@ export class CloudClient {
   #sessionKeyPromise: Promise<TokenSession>
   #accessTokenPromise: Promise<AccessTokenResponse>
   private proxyUrl: string | null = null;
+  private forceRefresh: boolean = false
 
   constructor(_options: ConfigurationOptions) {
     this.#valid(_options)
@@ -274,6 +341,7 @@ export class CloudClient {
         Referer: `${WEB_URL}/web/main/`,
         Accept: 'application/json;charset=UTF-8'
       },
+      dnsLookupIpVersion: dnsLookupIpVersion as 'auto' | 'ipv4' | 'ipv6',
       hooks: {
         beforeRequest: [
           async (options) => {
@@ -329,11 +397,13 @@ export class CloudClient {
                 logger.debug('InvalidAccessToken retry...')
                 logger.debug('Refresh AccessToken')
                 this.session.accessToken = ''
+                this.forceRefresh = true
                 return retryWithMergedOptions({})
               } else if (errorCode === 'InvalidSessionKey') {
                 logger.debug('InvalidSessionKey retry...')
                 logger.debug('Refresh InvalidSessionKey')
                 this.session.sessionKey = ''
+                this.forceRefresh = true
                 return retryWithMergedOptions({})
               }
             }
@@ -359,7 +429,7 @@ export class CloudClient {
   async getSession() {
     const { accessToken, expiresIn, refreshToken } = await this.tokenStore.get()
 
-    if (accessToken && expiresIn && expiresIn > Date.now()) {
+    if (!this.forceRefresh && accessToken && expiresIn && expiresIn > Date.now()) {
       try {
         return await this.authClient.loginByAccessToken(accessToken)
       } catch (e) {
@@ -369,6 +439,7 @@ export class CloudClient {
 
     if (refreshToken) {
       try {
+        this.forceRefresh = false
         const refreshTokenSession = await this.authClient.refreshToken(refreshToken)
         await this.tokenStore.update({
           accessToken: refreshTokenSession.accessToken,
@@ -383,6 +454,7 @@ export class CloudClient {
 
     if (this.ssonCookie) {
       try {
+        this.forceRefresh = false
         const loginToken = await this.authClient.loginBySsoCooike(this.ssonCookie)
         await this.tokenStore.update({
           accessToken: loginToken.accessToken,
@@ -397,6 +469,7 @@ export class CloudClient {
 
     if (this.username && this.password) {
       try {
+        this.forceRefresh = false
         const loginToken = await this.authClient.loginByPassword(this.username, this.password)
         await this.tokenStore.update({
           accessToken: loginToken.accessToken,

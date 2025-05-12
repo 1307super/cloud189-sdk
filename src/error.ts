@@ -8,6 +8,10 @@ export const checkError = (response: any) => {
   } catch (e) {
     return
   }
+  // 判断res是否是json
+  if (typeof res !== 'object') {
+    return
+  }
   // auth
   if ('result' in res && 'msg' in res) {
     switch (res.result) {

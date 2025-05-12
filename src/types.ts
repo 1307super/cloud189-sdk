@@ -141,6 +141,10 @@ export interface CacheQuery {
   reqId: string
   lt: string
   paramId: string
+  publicKey: string
+  preKey: string
+  rsaUserName: string
+  rsaPassword: string
 }
 
 /**
