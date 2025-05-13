@@ -29,8 +29,12 @@ import { Store, MemoryStore } from './store'
 import { checkError } from './error'
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const { HttpProxyAgent } = require('http-proxy-agent');
-// 从环境变量读取ipv4oripv6, 默认auto
-const dnsLookupIpVersion = process.env.DNS_LOOKUP_IP_VERSION || 'auto';
+type DnsLookupIpVersion = 'auto' | 'ipv4' | 'ipv6';
+
+const dnsLookupIpVersion: DnsLookupIpVersion = 
+  process.env.DNS_LOOKUP_IP_VERSION === 'ipv4' ? 'ipv4' :
+  process.env.DNS_LOOKUP_IP_VERSION === 'ipv6' ? 'ipv6' :
+  'auto';
 const config = {
   clientId: '538135150693412',
   model: 'KB2000',
@@ -61,7 +65,7 @@ export class CloudAuthClient {
         request: 10000  // 设置10秒超时
       },
       // 配置ipv4
-      dnsLookupIpVersion: dnsLookupIpVersion as 'auto' | 'ipv4' | 'ipv6',
+      dnsLookupIpVersion: dnsLookupIpVersion,
       hooks: {
         beforeRequest: [
           async (options) => {
@@ -341,7 +345,7 @@ export class CloudClient {
         Referer: `${WEB_URL}/web/main/`,
         Accept: 'application/json;charset=UTF-8'
       },
-      dnsLookupIpVersion: dnsLookupIpVersion as 'auto' | 'ipv4' | 'ipv6',
+      dnsLookupIpVersion: dnsLookupIpVersion,
       hooks: {
         beforeRequest: [
           async (options) => {
