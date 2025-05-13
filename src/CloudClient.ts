@@ -184,7 +184,7 @@ export class CloudAuthClient {
         const passwordEncrypt = rsaEncrypt(keyData, password)
         appConf.rsaUserName = `${encrypt.pre}${usernameEncrypt}`
         appConf.rsaPassword = `${encrypt.pre}${passwordEncrypt}`
-        this._checkValidateCode(appConf, appConf.rsaUserName)
+        await this._checkValidateCode(appConf)
       }
       
       const data = this.#builLoginForm(appConf, validateCode)
@@ -260,7 +260,7 @@ export class CloudAuthClient {
   /**
    * 判断是否需要验证码
    */
-  async _checkValidateCode(appConf: CacheQuery, username: string, validateCode?: string) {
+  async _checkValidateCode(appConf: CacheQuery) {
     // 判断是否需要验证码
     const needCaptcha = await this.request
     .post(`${AUTH_URL}/api/logbox/oauth2/needcaptcha.do`, {
@@ -270,7 +270,7 @@ export class CloudAuthClient {
       form: {
         appKey: AppID,
         accountType: AccountType,
-        userName: username,
+        userName: appConf.rsaUserName,
       }
     })
     .text()
