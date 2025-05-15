@@ -47,6 +47,7 @@ interface LoginResponse {
   toUrl: string
 }
 
+
 /**
  * @public
  */
@@ -59,7 +60,8 @@ export class CloudAuthClient {
     this.request = got.extend({
       headers: {
         'User-Agent': UserAgent,
-        Accept: 'application/json;charset=UTF-8'
+        Accept: 'application/json;charset=UTF-8',
+        "Referer": WEB_URL,
       },
       timeout: {
         request: 10000  // 设置10秒超时
@@ -282,11 +284,10 @@ export class CloudAuthClient {
               REQID: appConf.reqId,
               rnd: Date.now()
             },
-            responseType: 'buffer'
+             responseType: 'buffer'
           })
-        
-        if (imgRes.rawBody.length > 20) {
-          const base64Image = imgRes.rawBody.toString('base64')
+        if (imgRes.body.length > 20) {
+          const base64Image = imgRes.body.toString('base64');
           this.loginCache = appConf
           throw {
             code: 'NEED_CAPTCHA',
@@ -295,6 +296,10 @@ export class CloudAuthClient {
               image: `data:image/png;base64,${base64Image}`
             }
           }
+        }
+        throw {
+          code: 'GET_CAPTCHA_FAIL',
+          message: '获取验证码失败'
         }
     }
     return false;
